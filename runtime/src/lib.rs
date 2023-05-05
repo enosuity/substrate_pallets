@@ -6,6 +6,8 @@
 #[cfg(feature = "std")]
 include!(concat!(env!("OUT_DIR"), "/wasm_binary.rs"));
 
+use frame_support::PalletId;
+use frame_system::EnsureRoot;
 use pallet_grandpa::{
 	fg_primitives, AuthorityId as GrandpaId, AuthorityList as GrandpaAuthorityList,
 };
@@ -48,6 +50,7 @@ pub use sp_runtime::{Perbill, Permill};
 /// Import the template pallet.
 pub use pallet_template;
 pub use collectibles;
+pub use lottery;
 
 /// An index to a block.
 pub type BlockNumber = u32;
@@ -148,6 +151,7 @@ parameter_types! {
 	pub BlockLength: frame_system::limits::BlockLength = frame_system::limits::BlockLength
 		::max_with_normal_ratio(5 * 1024 * 1024, NORMAL_DISPATCH_RATIO);
 	pub const SS58Prefix: u8 = 42;
+	
 }
 
 // Configure FRAME pallets to include in runtime.
@@ -286,6 +290,24 @@ impl collectibles::Config for Runtime {
 	type MaximumOwned = ConstU32<100>;		
 }
 
+parameter_types! {
+	pub const LotteryPalletId: PalletId = PalletId(*b"enosuity");
+	pub const MaximumCalls: u32 = 10;
+	pub const MaximumTryToGenerateRandom: u32 = 15;
+}
+
+impl lottery::Config for Runtime {
+	type Currency = Balances;
+	type Randomness = RandomnessCollectiveFlip;
+	type RuntimeEvent = RuntimeEvent;
+	type PalletId = LotteryPalletId;
+	type ManagerOrigin = EnsureRoot<AccountId>;
+	type MaxCalls = MaximumCalls;
+	type RuntimeCall = RuntimeCall;	
+	type ValidateCall = Lottery;
+	type MaxGenerateRandom = MaximumTryToGenerateRandom;
+}
+
 // Create the runtime by composing the FRAME pallets that were previously configured.
 construct_runtime!(
 	pub struct Runtime
@@ -305,6 +327,7 @@ construct_runtime!(
 		// Include the custom logic from the pallet-template in the runtime.
 		TemplateModule: pallet_template,
 		Collectibles: collectibles,
+		Lottery: lottery,
 	}
 );
 

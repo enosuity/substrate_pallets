@@ -1,5 +1,5 @@
 [package]
-name = "lottery"
+name = "pallet_name"
 version = "4.0.0-dev"
 description = "FRAME pallet template for defining custom runtime logic."
 authors = ["Substrate Anuj <https://github.com/substrate-developer-hub>"]
