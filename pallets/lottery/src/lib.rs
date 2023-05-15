@@ -2,6 +2,16 @@
 
 pub use pallet::*;
 
+#[cfg(test)]
+mod mock;
+#[cfg(test)]
+mod tests;
+
+mod benchmarking;
+
+pub mod weights;
+pub use weights::WeightInfo;
+
 use codec::{ Decode, Encode };
 use log::info;
 
@@ -17,11 +27,17 @@ use frame_system::{pallet_prelude::{OriginFor}, ensure_signed};
 
 use frame_support::sp_runtime::{
 	traits::{AccountIdConversion, Saturating, Zero},
-	ArithmeticError, DispatchError
+	ArithmeticError, DispatchError,
 };
 use scale_info::prelude::boxed::Box;
 
-#[derive(Encode, Decode,Debug, Default, MaxEncodedLen, scale_info::TypeInfo)]
+type BalanceOf<T> =
+	<<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
+
+type CallIndex = (u8, u8);
+
+
+#[derive(Encode, Decode,Debug, Default, PartialEq, MaxEncodedLen, scale_info::TypeInfo)]
 pub struct LotteryConfig<BlockNumber, Balance> {
 	price: 	Balance,
 	start: 	BlockNumber,
@@ -64,6 +80,8 @@ pub mod pallet {
 
 		type ValidateCall: ValidateCall<Self>;
 		type MaxGenerateRandom: Get<u32>;
+
+		type WeightInfo: WeightInfo;
 	}
 
 	pub trait ValidateCall<T: Config> {
@@ -87,10 +105,6 @@ pub mod pallet {
 			valid_calls.iter().any(|item| *item == call_index)
 		}		
 	}
-
-	type BalanceOf<T> = <<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
-	type CallIndex = (u8, u8);
-
 
 	#[pallet::type_value]
 	pub(super) fn MyDefault<T: Config>() -> u32 { 100u32 }
@@ -137,12 +151,9 @@ pub mod pallet {
 
 	#[pallet::hooks]
 	impl <T: Config> Hooks<BlockNumberFor<T>> for Pallet<T> {
-		fn on_initialize(n: T::BlockNumber) -> Weight {			
+		fn on_initialize(n: T::BlockNumber) -> Weight {					
 			info!(target: "on_initialize", "=========== Starting new block: ======= ");
-
 			info!(target: "on initialize", "DummyBalance =====> {}", DummyBalance::<T>::get());
-
-			info!(target: "on initialize", "DummyBalance by fn=====> {}", Self::heloo());
 
 			Lottery::<T>::mutate(|mut lottery| -> Weight {
 				if let Some(config) = &mut lottery {					
@@ -172,10 +183,10 @@ pub mod pallet {
 						if config.repeat {
 							config.start = n;
 							LotteryIndex::<T>::mutate(|index| *index = index.saturating_add(1));
-							return  T::DbWeight::get().reads(2);							
+							return  T::WeightInfo::on_initialize_repeat()						
 						} else {
 							*lottery = None;
-							return  T::DbWeight::get().reads(2);
+							return  T::WeightInfo::on_initialize_end()
 						}
 
 					}																																
@@ -222,7 +233,10 @@ pub mod pallet {
 	#[pallet::call]
 	impl<T: Config> Pallet<T> {
 
-		#[pallet::weight(0)]
+		#[pallet::weight(
+			T::WeightInfo::buy_ticket()
+			.saturating_add(call.get_dispatch_info().weight)
+		)]
 		pub fn buy_ticket(
 			origin: OriginFor<T>,
 			call: Box<<T as Config>::RuntimeCall>,
@@ -238,12 +252,10 @@ pub mod pallet {
 
 			info!(target: "buy_ticket", "=========== caller =======> {:?} ", caller);
 
-			let _ = Self::do_buy_ticket(&caller, &call);
-
-			Ok(())
+			Self::do_buy_ticket(&caller, &call)
 		}
 
-		#[pallet::weight(0)]
+		#[pallet::weight(T::WeightInfo::set_calls(calls.len() as u32))]
 		pub fn set_calls(
 			origin: OriginFor<T>,
 			calls: Vec<<T as Config>::RuntimeCall>,
@@ -264,7 +276,7 @@ pub mod pallet {
 			Ok(())
 		}
 
-		#[pallet::weight(0)]
+		#[pallet::weight(T::WeightInfo::start_lottery())]
 		pub fn start_lottery(
 			origin: OriginFor<T>,
 			price: BalanceOf<T>,
@@ -306,13 +318,11 @@ pub mod pallet {
 					balance: T::Currency::total_balance(&lottery_account_id)
 				}
 			);
-
-
 			
 			Ok(())
 		}
 
-		#[pallet::weight(0)]
+		#[pallet::weight(T::WeightInfo::stop_lottery())]
 		pub fn stop_lottery(
 			origin: OriginFor<T>,
 		)-> DispatchResult {
@@ -353,7 +363,7 @@ pub mod pallet {
 			T::PalletId::get().into_account_truncating()
 		}
 
-		fn pot() -> (T::AccountId, BalanceOf<T>) {
+		pub fn pot() -> (T::AccountId, BalanceOf<T>) {
 			let account_id = Self::account_id();
 			let balance =
 					T::Currency::free_balance(&account_id).saturating_sub(T::Currency::minimum_balance());
@@ -361,7 +371,7 @@ pub mod pallet {
 			(account_id, balance)
 		}
 
-		fn do_buy_ticket(caller: &T::AccountId, call: &<T as Config>::RuntimeCall) -> DispatchResult {
+		pub fn do_buy_ticket(caller: &T::AccountId, call: &<T as Config>::RuntimeCall) -> DispatchResult {
 			info!(target: "do_buy_ticket", " ====  Started do_buy_ticket =========== ");
 
 			let config = Lottery::<T>::get().ok_or(Error::<T>::NotConfigured)?;
@@ -375,10 +385,7 @@ pub mod pallet {
 				Error::<T>::AlreadyEnded
 			);
 
-			ensure!(
-				T::ValidateCall::validate_call(call),
-				Error::<T>::InvalidCall
-			);
+			ensure!(T::ValidateCall::validate_call(call), Error::<T>::InvalidCall);
 
 			let call_index = Self::call_to_index(call)?;
 			let tickets_count = TicketsCount::<T>::get();
@@ -424,7 +431,7 @@ pub mod pallet {
 			Ok(())
 		}
 
-		fn calls_to_indices(calls: &[<T as Config>::RuntimeCall]) -> Result<BoundedVec<CallIndex, T::MaxCalls>, DispatchError> {
+		pub fn calls_to_indices(calls: &[<T as Config>::RuntimeCall]) -> Result<BoundedVec<CallIndex, T::MaxCalls>, DispatchError> {
 			let mut indices = BoundedVec::<CallIndex, T::MaxCalls>::with_bounded_capacity(calls.len());
 
 			info!("Before indices length ====> {:?}", indices);
@@ -440,7 +447,7 @@ pub mod pallet {
 
 		// basic call type params value comes with pallet name and function - it return index values of both.
 
-		fn call_to_index(call: &<T as Config>::RuntimeCall) -> Result<CallIndex, DispatchError> {
+		pub fn call_to_index(call: &<T as Config>::RuntimeCall) -> Result<CallIndex, DispatchError> {
 			let encoded_call = call.encode();
 			if encoded_call.len() < 2 {
 				return Err(Error::<T>::EncodingFailed.into())
@@ -449,15 +456,14 @@ pub mod pallet {
 			Ok((encoded_call[0], encoded_call[1]))
 		}
 
-		fn lucky_draw() -> Option<T::AccountId> {
-			match Self::pick_random_ticket() {
+		pub fn lucky_draw() -> Option<T::AccountId> {
+			match Self::pick_random_ticket(TicketsCount::<T>::get()) {
 				None => None,
 				Some(ticket) => Tickets::<T>::get(ticket),
 			}
 		}
 
-		fn pick_random_ticket() -> Option<u32> {
-			let total = TicketsCount::<T>::get();
+		pub fn pick_random_ticket(total: u32) -> Option<u32> {
 			if total == 0 {
 				return None
 			}
@@ -476,7 +482,7 @@ pub mod pallet {
 
 
 
-		fn generate_random_number(seed: u32) -> u32 {
+		pub fn generate_random_number(seed: u32) -> u32 {
 			let (random_seed, _) = T::Randomness::random(&(T::PalletId::get(), seed).encode());
 			let random  = <u32>::decode(&mut random_seed.as_ref())
 				.expect("secure hashes should always be bigger than u32; qed");

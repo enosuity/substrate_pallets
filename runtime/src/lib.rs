@@ -306,6 +306,7 @@ impl lottery::Config for Runtime {
 	type RuntimeCall = RuntimeCall;	
 	type ValidateCall = Lottery;
 	type MaxGenerateRandom = MaximumTryToGenerateRandom;
+	type WeightInfo = lottery::weights::SubstrateWeight<Runtime>;
 }
 
 // Create the runtime by composing the FRAME pallets that were previously configured.
@@ -375,6 +376,7 @@ mod benches {
 		[pallet_balances, Balances]
 		[pallet_timestamp, Timestamp]
 		[pallet_template, TemplateModule]
+		[lottery, Lottery]
 	);
 }
 
